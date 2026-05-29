@@ -290,14 +290,15 @@ const SecureStorage = {
     this.writeBackup(payload);
     const envelope = await this.encryptPayload(key, payload);
     this.writeVaultLocal(envelope);
+    let cloudOk = true;
     if (typeof CloudSync !== "undefined" && CloudSync.isEnabled()) {
       try {
         this.lastRemoteUpdatedAt = (await CloudSync.saveVaultEnvelope(envelope)) ?? this.lastRemoteUpdatedAt;
       } catch {
-        /* keep local copy even if cloud sync fails */
+        cloudOk = false;
       }
     }
-    return envelope;
+    return { envelope, cloudOk };
   },
 
   async loadVault(key) {

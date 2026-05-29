@@ -170,11 +170,13 @@ async function bootstrapSecureData(key) {
   const payload = await SecureStorage.loadVault(key);
   if (payload) {
     applyVaultPayload(payload);
+    await seedCloudIfEmpty(key);
     return;
   }
 
   if (SecureStorage.hasLegacyPlaintext()) {
     applyVaultPayload(await SecureStorage.migrateLegacyPlaintext(key, defaultPayload()));
+    await seedCloudIfEmpty(key);
     return;
   }
 
@@ -193,25 +195,108 @@ async function bootstrapSecureData(key) {
 
   applyVaultPayload(defaultPayload());
   await SecureStorage.saveVault(key, { state, productCenters, languages });
+  await seedCloudIfEmpty(key);
+}
+
+async function seedCloudIfEmpty(key) {
+  if (typeof CloudSync === "undefined" || !CloudSync.isEnabled()) return;
+  try {
+    const row = (await CloudSync.fetchRow()) ?? {};
+    if (!row.verifier) {
+      const verifier = await SecureStorage.getVerifier();
+      if (verifier) await CloudSync.saveVerifier(verifier);
+    }
+    if (!row.vault) {
+      await SecureStorage.saveVault(key, { state, productCenters, languages });
+    }
+  } catch {
+    updateSyncStatus("error");
+  }
 }
 
 let syncPollTimer = null;
+let lastSyncToastAt = 0;
+
+async function refreshFromCloud(key, { silent = false } = {}) {
+  if (typeof CloudSync === "undefined" || !CloudSync.isEnabled()) return false;
+  try {
+    const payload = await SecureStorage.fetchRemoteVault(key);
+    if (!payload) return false;
+    applyVaultPayload(payload);
+    migrateState();
+    renderAll();
+    if (!silent && Date.now() - lastSyncToastAt > 8000) {
+      lastSyncToastAt = Date.now();
+      showToast(t("toast.syncUpdated"));
+    }
+    updateSyncStatus("online");
+    return true;
+  } catch {
+    updateSyncStatus("error");
+    return false;
+  }
+}
 
 function startCloudPolling(key) {
   if (typeof CloudSync === "undefined" || !CloudSync.isEnabled()) return;
   clearInterval(syncPollTimer);
-  syncPollTimer = setInterval(async () => {
-    try {
-      const payload = await SecureStorage.fetchRemoteVault(key);
-      if (!payload) return;
-      applyVaultPayload(payload);
-      migrateState();
-      renderAll();
-      showToast(t("toast.syncUpdated"));
-    } catch {
-      /* ignore transient sync errors */
-    }
-  }, 20000);
+  syncPollTimer = setInterval(() => {
+    void refreshFromCloud(key, { silent: true });
+  }, 8000);
+  document.addEventListener(
+    "visibilitychange",
+    () => {
+      if (document.visibilityState === "visible") {
+        void refreshFromCloud(key, { silent: true });
+      }
+    },
+    { passive: true },
+  );
+}
+
+function mountSyncStatus() {
+  const toolbar = document.querySelector(".toolbar");
+  if (!toolbar || document.getElementById("syncStatus")) return;
+  const badge = document.createElement("span");
+  badge.id = "syncStatus";
+  badge.className = "sync-status sync-status-off";
+  badge.title = t("sync.status.off");
+  badge.textContent = t("sync.label.off");
+  toolbar.insertBefore(badge, toolbar.firstChild);
+  void updateSyncStatus();
+}
+
+async function updateSyncStatus(forcedState) {
+  const badge = document.getElementById("syncStatus");
+  if (!badge) return;
+  if (typeof CloudSync === "undefined" || !CloudSync.isEnabled()) {
+    badge.className = "sync-status sync-status-off";
+    badge.textContent = t("sync.label.off");
+    badge.title = t("sync.status.off");
+    return;
+  }
+  if (forcedState === "error") {
+    badge.className = "sync-status sync-status-error";
+    badge.textContent = t("sync.label.error");
+    badge.title = t("sync.status.error");
+    return;
+  }
+  if (forcedState === "online") {
+    badge.className = "sync-status sync-status-on";
+    badge.textContent = t("sync.label.on");
+    badge.title = t("sync.status.on");
+    return;
+  }
+  const online = await CloudSync.ping();
+  if (online) {
+    badge.className = "sync-status sync-status-on";
+    badge.textContent = t("sync.label.on");
+    badge.title = t("sync.status.on");
+  } else {
+    badge.className = "sync-status sync-status-error";
+    badge.textContent = t("sync.label.error");
+    badge.title = t("sync.status.error");
+  }
 }
 
 let persistTimer = null;
@@ -222,11 +307,22 @@ async function persistDataNow() {
   if (!key || typeof SecureStorage === "undefined") return;
   clearTimeout(persistTimer);
   persistTimer = null;
-  persistInFlight = SecureStorage.saveVault(key, { state, productCenters, languages }).catch(() => {
+  try {
+    persistInFlight = SecureStorage.saveVault(key, { state, productCenters, languages });
+    const result = await persistInFlight;
+    if (typeof CloudSync !== "undefined" && CloudSync.isEnabled()) {
+      if (result.cloudOk) {
+        updateSyncStatus("online");
+      } else {
+        updateSyncStatus("error");
+        showToast(t("toast.syncFailed"));
+      }
+    }
+  } catch {
     showToast(t("toast.saveFailed"));
-  });
-  await persistInFlight;
-  persistInFlight = null;
+  } finally {
+    persistInFlight = null;
+  }
 }
 
 function persistData() {
@@ -1705,6 +1801,7 @@ function startApp() {
     }
     migrateState();
     applyStaticI18n();
+    mountSyncStatus();
     renderAll();
     switchView("dashboard");
     showAppShell();

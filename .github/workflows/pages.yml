@@ -24,6 +24,25 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Generate team sync config
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          if [ -n "$SUPABASE_URL" ] && [ -n "$SUPABASE_ANON_KEY" ]; then
+            cat > sync-config.js <<EOF
+          const SYNC_CONFIG = {
+            enabled: true,
+            url: "${SUPABASE_URL}",
+            anonKey: "${SUPABASE_ANON_KEY}",
+            workspaceId: "translation-intern-ops",
+          };
+          EOF
+            echo "Team sync enabled from GitHub Secrets."
+          else
+            echo "SUPABASE_URL / SUPABASE_ANON_KEY not set — team sync stays disabled."
+          fi
+
       - name: Setup Pages
         uses: actions/configure-pages@v5
         with:

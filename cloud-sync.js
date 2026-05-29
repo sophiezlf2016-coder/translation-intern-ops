@@ -1,21 +1,23 @@
+function getSyncConfig() {
+  if (typeof SYNC_CONFIG === "undefined") return null;
+  return SYNC_CONFIG;
+}
+
 const CloudSync = {
   isEnabled() {
-    return Boolean(
-      typeof SYNC_CONFIG !== "undefined" &&
-        SYNC_CONFIG.enabled &&
-        SYNC_CONFIG.url &&
-        SYNC_CONFIG.anonKey,
-    );
+    const config = getSyncConfig();
+    return Boolean(config?.enabled && config?.url && config?.anonKey);
   },
 
   workspaceId() {
-    return SYNC_CONFIG.workspaceId || "default";
+    return getSyncConfig()?.workspaceId || "default";
   },
 
   headers(prefer) {
+    const config = getSyncConfig();
     const headers = {
-      apikey: SYNC_CONFIG.anonKey,
-      Authorization: `Bearer ${SYNC_CONFIG.anonKey}`,
+      apikey: config.anonKey,
+      Authorization: `Bearer ${config.anonKey}`,
       "Content-Type": "application/json",
     };
     if (prefer) headers.Prefer = prefer;
@@ -23,7 +25,8 @@ const CloudSync = {
   },
 
   tableUrl() {
-    return `${SYNC_CONFIG.url.replace(/\/$/, "")}/rest/v1/workspaces`;
+    const config = getSyncConfig();
+    return `${config.url.replace(/\/$/, "")}/rest/v1/workspaces`;
   },
 
   async ping() {
