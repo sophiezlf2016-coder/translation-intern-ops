@@ -1639,6 +1639,18 @@ $("#knowledgeForm").addEventListener("submit", (event) => {
   showToast(t("toast.knowledgeSaved"));
 });
 
-applyStaticI18n();
-renderAll();
-switchView("dashboard");
+function startApp() {
+  applyStaticI18n();
+  renderAll();
+  switchView("dashboard");
+}
+
+function bootApp() {
+  startApp();
+}
+
+if (window.__authReady) {
+  bootApp();
+} else {
+  document.addEventListener("auth-ready", bootApp, { once: true });
+}
