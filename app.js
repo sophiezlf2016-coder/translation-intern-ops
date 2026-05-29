@@ -278,9 +278,10 @@ function openSyncSetupModal() {
   modal.classList.remove("hidden");
   const override = loadSyncOverride();
   const form = document.getElementById("syncSetupForm");
-  if (form && override) {
-    form.elements.url.value = override.url || "";
-    form.elements.anonKey.value = override.anonKey || "";
+  const config = typeof getSyncConfig === "function" ? getSyncConfig() : null;
+  if (form) {
+    form.elements.url.value = override?.url || config?.url || "";
+    form.elements.anonKey.value = override?.anonKey || config?.anonKey || "";
   }
   const codeBox = document.getElementById("syncSetupCodeBox");
   const codeField = document.getElementById("syncSetupCode");
