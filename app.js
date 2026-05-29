@@ -1078,7 +1078,7 @@ function taskRow(task, compact = false) {
       <span>${displayTaskDate(task.createdAt)}</span>
       <span>${displayDeadline(task.deadline)}</span>
       <span class="priority-badge ${task.priority === "高" ? "high" : ""}">${displayPriority(task.priority)}</span>
-      <div class="progress" aria-label="${t("common.progress", { percent: task.progress })}"><span style="width:${task.progress}%"></span></div>
+      <div class="progress${task.progress >= 100 ? " progress-complete" : ""}" aria-label="${t("common.progress", { percent: task.progress })}"><span style="width:${task.progress}%"></span></div>
       ${
         compact
           ? ""
