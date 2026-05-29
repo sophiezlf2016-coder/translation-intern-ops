@@ -178,8 +178,12 @@ async function bootstrapSecureData(key) {
     return;
   }
 
-  const hasEncryptedVault = SecureStorage.hasVaultLocal() || (await SecureStorage.hasRemoteVault());
-  if (hasEncryptedVault) {
+  const hasStoredData =
+    SecureStorage.hasBackup() ||
+    SecureStorage.hasVaultLocal() ||
+    SecureStorage.hasLegacyPlaintext() ||
+    (await SecureStorage.hasRemoteVault());
+  if (hasStoredData) {
     showToast(t("toast.loadFailed"));
     sessionStorage.removeItem("translation-intern-manager-auth");
     window.__secureStorageKey = null;
@@ -226,13 +230,7 @@ async function persistDataNow() {
 }
 
 function persistData() {
-  const key = window.__secureStorageKey;
-  if (!key || typeof SecureStorage === "undefined") return;
-  clearTimeout(persistTimer);
-  persistTimer = setTimeout(() => {
-    persistTimer = null;
-    persistDataNow();
-  }, 80);
+  void persistDataNow();
 }
 
 function flushPersistData() {

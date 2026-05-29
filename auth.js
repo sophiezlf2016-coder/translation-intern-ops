@@ -85,22 +85,24 @@ function readSession() {
     const raw = sessionStorage.getItem(AUTH_STORAGE_KEY);
     if (!raw) return null;
     const session = JSON.parse(raw);
-    if (!session?.keyMaterial || !session?.expiresAt) return null;
+    if (!session?.expiresAt) return null;
     if (Date.now() > session.expiresAt) {
       sessionStorage.removeItem(AUTH_STORAGE_KEY);
       return null;
     }
+    if (!session.password && !session.keyMaterial) return null;
     return session;
   } catch {
     return null;
   }
 }
 
-function writeSession(keyMaterial) {
+function writeSession(keyMaterial, password) {
   sessionStorage.setItem(
     AUTH_STORAGE_KEY,
     JSON.stringify({
       keyMaterial,
+      password,
       expiresAt: Date.now() + AUTH_SESSION_HOURS * 60 * 60 * 1000,
     }),
   );
@@ -216,10 +218,20 @@ function renderAuthGate(mode = "login") {
   });
 }
 
+async function resolveSessionKey(session) {
+  if (session.password) {
+    return SecureStorage.deriveKey(session.password);
+  }
+  if (session.keyMaterial) {
+    return SecureStorage.importKeyMaterial(session.keyMaterial);
+  }
+  throw new Error("Session key missing");
+}
+
 async function completeLogin(password) {
   const key = await SecureStorage.deriveKey(password);
   const keyMaterial = await SecureStorage.exportKeyMaterial(key);
-  writeSession(keyMaterial);
+  writeSession(keyMaterial, password);
   window.__secureStorageKey = key;
   SecureStorage.clearFailedAttempts();
   removeAuthGate();
@@ -245,7 +257,7 @@ function mountLogoutButton() {
 
 async function restoreAuthenticatedSession(session) {
   try {
-    window.__secureStorageKey = await SecureStorage.importKeyMaterial(session.keyMaterial);
+    window.__secureStorageKey = await resolveSessionKey(session);
     showAppShell();
     mountLogoutButton();
     document.dispatchEvent(new CustomEvent("auth-ready", { detail: { key: window.__secureStorageKey } }));

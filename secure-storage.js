@@ -1,4 +1,5 @@
 const VAULT_KEY = "translation-intern-manager-vault";
+const BACKUP_KEY = "translation-intern-manager-data-backup";
 const AUTH_VERIFIER_KEY = "translation-intern-manager-auth-verifier";
 const AUTH_LOCKOUT_KEY = "translation-intern-manager-auth-lockout";
 const LEGACY_STORAGE_KEY = "translation-intern-manager-data";
@@ -218,6 +219,38 @@ const SecureStorage = {
     this.clearLegacyPlaintext();
   },
 
+  writeBackup(payload) {
+    localStorage.setItem(
+      BACKUP_KEY,
+      JSON.stringify({
+        state: payload.state,
+        productCenters: payload.productCenters,
+        languages: payload.languages,
+        savedAt: new Date().toISOString(),
+      }),
+    );
+  },
+
+  loadBackup() {
+    try {
+      const raw = localStorage.getItem(BACKUP_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (!parsed?.state) return null;
+      return {
+        state: parsed.state,
+        productCenters: parsed.productCenters,
+        languages: parsed.languages,
+      };
+    } catch {
+      return null;
+    }
+  },
+
+  hasBackup() {
+    return Boolean(localStorage.getItem(BACKUP_KEY));
+  },
+
   async hasRemoteVault() {
     if (typeof CloudSync === "undefined" || !CloudSync.isEnabled()) return false;
     try {
@@ -240,6 +273,7 @@ const SecureStorage = {
   },
 
   async saveVault(key, payload) {
+    this.writeBackup(payload);
     const envelope = await this.encryptPayload(key, payload);
     this.writeVaultLocal(envelope);
     if (typeof CloudSync !== "undefined" && CloudSync.isEnabled()) {
@@ -254,35 +288,40 @@ const SecureStorage = {
 
   async loadVault(key) {
     const local = await this.tryDecryptLocalVault(key);
+    let payload = local?.payload ?? null;
 
-    if (typeof CloudSync === "undefined" || !CloudSync.isEnabled()) {
-      return local?.payload ?? null;
-    }
-
-    try {
-      const row = await CloudSync.fetchRow();
-      const remoteEnvelope = row?.vault;
-      if (!remoteEnvelope) return local?.payload ?? null;
-
-      let remotePayload = null;
+    if (typeof CloudSync !== "undefined" && CloudSync.isEnabled()) {
       try {
-        remotePayload = await this.decryptPayload(key, remoteEnvelope);
+        const row = await CloudSync.fetchRow();
+        const remoteEnvelope = row?.vault;
+        if (remoteEnvelope) {
+          let remotePayload = null;
+          try {
+            remotePayload = await this.decryptPayload(key, remoteEnvelope);
+          } catch {
+            remotePayload = null;
+          }
+
+          const remoteSavedAt = remoteEnvelope.savedAt ?? row.updated_at ?? "";
+          const localSavedAt = local?.envelope?.savedAt ?? "";
+          this.lastRemoteUpdatedAt = row.updated_at ?? "";
+
+          if (remotePayload && (!payload || remoteSavedAt > localSavedAt)) {
+            this.writeVaultLocal(remoteEnvelope);
+            payload = remotePayload;
+          }
+        }
       } catch {
-        return local?.payload ?? null;
+        /* fall back below */
       }
-
-      const remoteSavedAt = remoteEnvelope.savedAt ?? row.updated_at ?? "";
-      const localSavedAt = local?.envelope?.savedAt ?? "";
-      this.lastRemoteUpdatedAt = row.updated_at ?? "";
-
-      if (!local?.payload || remoteSavedAt > localSavedAt) {
-        this.writeVaultLocal(remoteEnvelope);
-        return remotePayload;
-      }
-      return local.payload;
-    } catch {
-      return local?.payload ?? null;
     }
+
+    if (payload) {
+      this.writeBackup(payload);
+      return payload;
+    }
+
+    return this.loadBackup();
   },
 
   async fetchRemoteVault(key) {
@@ -291,7 +330,13 @@ const SecureStorage = {
     if (!row?.vault || row.updated_at === this.lastRemoteUpdatedAt) return null;
     this.lastRemoteUpdatedAt = row.updated_at ?? "";
     this.writeVaultLocal(row.vault);
-    return this.decryptPayload(key, row.vault);
+    try {
+      const payload = await this.decryptPayload(key, row.vault);
+      this.writeBackup(payload);
+      return payload;
+    } catch {
+      return null;
+    }
   },
 
   async migrateLegacyPlaintext(key, defaultPayload) {
