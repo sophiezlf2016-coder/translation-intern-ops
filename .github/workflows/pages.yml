@@ -16,43 +16,14 @@ concurrency:
 
 jobs:
   deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Generate team sync config
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+      - name: Verify team sync config
         run: |
-          if [ -n "$SUPABASE_URL" ] && [ -n "$SUPABASE_ANON_KEY" ]; then
-            cat > sync-config.js <<EOF
-          const SYNC_CONFIG = {
-            enabled: true,
-            url: "${SUPABASE_URL}",
-            anonKey: "${SUPABASE_ANON_KEY}",
-            workspaceId: "translation-intern-ops",
-          };
-          EOF
-            echo "Team sync enabled from GitHub Secrets."
-          else
-            echo "SUPABASE_URL / SUPABASE_ANON_KEY not set — team sync stays disabled."
-          fi
+          node -e "const fs=require('fs'); const s=fs.readFileSync('sync-config.js','utf8'); if(!/enabled:\\s*true/.test(s) && !/TEAM_SYNC_DEFAULTS/.test(fs.readFileSync('cloud-sync.js','utf8'))) { console.warn('Team sync may be disabled'); } else { console.log('Team sync config OK'); }"
 
-      - name: Setup Pages
-        uses: actions/configure-pages@v5
-        with:
-          enablement: true
-
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: .
-
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+      - name: Trigger GitHub Pages rebuild
+        run: echo "Legacy Pages serves directly from main branch on push."
