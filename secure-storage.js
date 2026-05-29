@@ -41,13 +41,17 @@ async function pbkdf2Hash(password, salt, iterations = PBKDF2_ITERATIONS) {
   return new Uint8Array(bits);
 }
 
-function readVerifier() {
+function readVerifierLocal() {
   try {
     const raw = localStorage.getItem(AUTH_VERIFIER_KEY);
     return raw ? JSON.parse(raw) : null;
   } catch {
     return null;
   }
+}
+
+function writeVerifierLocal(verifier) {
+  localStorage.setItem(AUTH_VERIFIER_KEY, JSON.stringify(verifier));
 }
 
 function readLockout() {
@@ -64,11 +68,29 @@ function writeLockout(value) {
 }
 
 const SecureStorage = {
-  hasVerifier() {
-    return Boolean(readVerifier());
+  _verifierCache: null,
+  lastRemoteUpdatedAt: "",
+
+  async getVerifier() {
+    if (this._verifierCache) return this._verifierCache;
+    if (typeof CloudSync !== "undefined" && CloudSync.isEnabled()) {
+      const row = await CloudSync.fetchRow();
+      if (row?.verifier) {
+        this._verifierCache = row.verifier;
+        writeVerifierLocal(row.verifier);
+        return row.verifier;
+      }
+    }
+    const local = readVerifierLocal();
+    if (local) this._verifierCache = local;
+    return local;
   },
 
-  hasVault() {
+  async hasVerifier() {
+    return Boolean(await this.getVerifier());
+  },
+
+  hasVaultLocal() {
     return Boolean(localStorage.getItem(VAULT_KEY));
   },
 
@@ -106,19 +128,21 @@ const SecureStorage = {
   async setupPassword(password) {
     const salt = crypto.getRandomValues(new Uint8Array(16));
     const hash = await pbkdf2Hash(password, salt);
-    localStorage.setItem(
-      AUTH_VERIFIER_KEY,
-      JSON.stringify({
-        salt: b64(salt),
-        hash: b64(hash),
-        iterations: PBKDF2_ITERATIONS,
-        v: 1,
-      }),
-    );
+    const verifier = {
+      salt: b64(salt),
+      hash: b64(hash),
+      iterations: PBKDF2_ITERATIONS,
+      v: 1,
+    };
+    this._verifierCache = verifier;
+    writeVerifierLocal(verifier);
+    if (typeof CloudSync !== "undefined" && CloudSync.isEnabled()) {
+      await CloudSync.saveVerifier(verifier);
+    }
   },
 
   async verifyPassword(password) {
-    const verifier = readVerifier();
+    const verifier = await this.getVerifier();
     if (!verifier) return false;
     const salt = fromB64(verifier.salt);
     const hash = await pbkdf2Hash(password, salt, verifier.iterations ?? PBKDF2_ITERATIONS);
@@ -126,7 +150,7 @@ const SecureStorage = {
   },
 
   async deriveKey(password) {
-    const verifier = readVerifier();
+    const verifier = await this.getVerifier();
     if (!verifier) throw new Error("Verifier missing");
     const salt = fromB64(verifier.salt);
     const baseKey = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveKey"]);
@@ -188,13 +212,32 @@ const SecureStorage = {
     localStorage.removeItem(LEGACY_LANGUAGE_KEY);
   },
 
-  async saveVault(key, payload) {
-    const envelope = await this.encryptPayload(key, payload);
+  writeVaultLocal(envelope) {
     localStorage.setItem(VAULT_KEY, JSON.stringify(envelope));
     this.clearLegacyPlaintext();
   },
 
+  async saveVault(key, payload) {
+    const envelope = await this.encryptPayload(key, payload);
+    this.writeVaultLocal(envelope);
+    if (typeof CloudSync !== "undefined" && CloudSync.isEnabled()) {
+      this.lastRemoteUpdatedAt = (await CloudSync.saveVaultEnvelope(envelope)) ?? this.lastRemoteUpdatedAt;
+    }
+  },
+
   async loadVault(key) {
+    if (typeof CloudSync !== "undefined" && CloudSync.isEnabled()) {
+      try {
+        const row = await CloudSync.fetchRow();
+        if (row?.vault) {
+          this.lastRemoteUpdatedAt = row.updated_at ?? "";
+          this.writeVaultLocal(row.vault);
+          return await this.decryptPayload(key, row.vault);
+        }
+      } catch {
+        /* fall back to local cache */
+      }
+    }
     const raw = localStorage.getItem(VAULT_KEY);
     if (!raw) return null;
     try {
@@ -202,6 +245,15 @@ const SecureStorage = {
     } catch {
       return null;
     }
+  },
+
+  async fetchRemoteVault(key) {
+    if (typeof CloudSync === "undefined" || !CloudSync.isEnabled()) return null;
+    const row = await CloudSync.fetchRow();
+    if (!row?.vault || row.updated_at === this.lastRemoteUpdatedAt) return null;
+    this.lastRemoteUpdatedAt = row.updated_at ?? "";
+    this.writeVaultLocal(row.vault);
+    return this.decryptPayload(key, row.vault);
   },
 
   async migrateLegacyPlaintext(key, defaultPayload) {

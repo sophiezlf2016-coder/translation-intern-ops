@@ -4,14 +4,26 @@ const MIN_PASSWORD_LENGTH = 8;
 
 const AUTH_CONFIG = {
   enabled: true,
-  blockPublicHost: true,
+  blockPublicHost: false,
 };
+
+function isCloudSyncEnabled() {
+  return typeof CloudSync !== "undefined" && CloudSync.isEnabled();
+}
+
+function authSubtitle(isSetup) {
+  if (isCloudSyncEnabled()) {
+    return authText(isSetup ? "auth.setupSubtitle" : "auth.loginSubtitle");
+  }
+  return authText(isSetup ? "auth.setupSubtitle" : "auth.subtitle");
+}
 
 function authText(key, vars = {}) {
   const zh = {
     "auth.title": "Translation Intern Ops",
     "auth.subtitle": "内部访问验证",
-    "auth.setupSubtitle": "首次使用请设置访问密码",
+    "auth.setupSubtitle": "首次使用请设置团队访问密码（所有成员共用）",
+    "auth.loginSubtitle": "请输入团队访问密码",
     "auth.password": "访问密码",
     "auth.passwordPh": "请输入访问密码",
     "auth.confirmPassword": "确认密码",
@@ -23,13 +35,14 @@ function authText(key, vars = {}) {
     "auth.setupTooShort": "密码至少 8 位，建议包含字母和数字。",
     "auth.locked": "尝试次数过多，请 {minutes} 分钟后再试。",
     "auth.blockedTitle": "仅限内网访问",
-    "auth.blockedDesc": "公网地址已关闭。请通过公司内网或 VPN 访问内部部署地址，数据已加密存储。",
+    "auth.cloudUnavailable": "云端同步未就绪，请检查 Supabase 配置。",
     "auth.logout": "退出",
   };
   const en = {
     "auth.title": "Translation Intern Ops",
     "auth.subtitle": "Internal access required",
-    "auth.setupSubtitle": "Set an access password on first use",
+    "auth.setupSubtitle": "Set a team access password (shared by all members)",
+    "auth.loginSubtitle": "Enter the team access password",
     "auth.password": "Access password",
     "auth.passwordPh": "Enter access password",
     "auth.confirmPassword": "Confirm password",
@@ -41,7 +54,7 @@ function authText(key, vars = {}) {
     "auth.setupTooShort": "Password must be at least 8 characters.",
     "auth.locked": "Too many attempts. Try again in {minutes} min.",
     "auth.blockedTitle": "Intranet access only",
-    "auth.blockedDesc": "Public access is disabled. Use the internal deployment URL via company network or VPN. Data is encrypted at rest.",
+    "auth.cloudUnavailable": "Cloud sync is unavailable. Check Supabase configuration.",
     "auth.logout": "Sign out",
   };
   const locale = typeof getUiLocale === "function" ? getUiLocale() : "zh";
@@ -136,7 +149,7 @@ function renderAuthGate(mode = "login") {
     <form class="auth-card" id="authForm">
       <div class="auth-brand">译</div>
       <h1>${authText("auth.title")}</h1>
-      <p class="auth-subtitle">${authText(isSetup ? "auth.setupSubtitle" : "auth.subtitle")}</p>
+      <p class="auth-subtitle">${authSubtitle(isSetup)}</p>
       ${
         lockout.locked
           ? `<p class="auth-error">${authText("auth.locked", { minutes: lockout.minutes })}</p>`
@@ -238,11 +251,12 @@ async function restoreAuthenticatedSession(session) {
     document.dispatchEvent(new CustomEvent("auth-ready", { detail: { key: window.__secureStorageKey } }));
   } catch {
     clearSession();
-    renderAuthGate(SecureStorage.hasVerifier() ? "login" : "setup");
+    const hasVerifier = await SecureStorage.hasVerifier();
+    renderAuthGate(hasVerifier ? "login" : "setup");
   }
 }
 
-function initAccessGate() {
+async function initAccessGate() {
   if (!AUTH_CONFIG.enabled) {
     showAppShell();
     document.dispatchEvent(new Event("auth-ready"));
@@ -254,13 +268,33 @@ function initAccessGate() {
     return;
   }
 
+  if (isCloudSyncEnabled()) {
+    const online = await CloudSync.ping();
+    if (!online) {
+      hideAppShell();
+      const gate = document.createElement("div");
+      gate.id = "authGate";
+      gate.className = "auth-gate";
+      gate.innerHTML = `
+        <div class="auth-card auth-card-blocked">
+          <div class="auth-brand">译</div>
+          <h1>${authText("auth.title")}</h1>
+          <p>${authText("auth.cloudUnavailable")}</p>
+        </div>
+      `;
+      document.body.appendChild(gate);
+      return;
+    }
+  }
+
   const session = readSession();
   if (session) {
-    restoreAuthenticatedSession(session);
+    await restoreAuthenticatedSession(session);
     return;
   }
 
-  renderAuthGate(SecureStorage.hasVerifier() ? "login" : "setup");
+  const hasVerifier = await SecureStorage.hasVerifier();
+  renderAuthGate(hasVerifier ? "login" : "setup");
 }
 
 initAccessGate();

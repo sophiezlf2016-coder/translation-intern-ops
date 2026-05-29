@@ -170,6 +170,25 @@ async function bootstrapSecureData(key) {
   applyVaultPayload(payload);
 }
 
+let syncPollTimer = null;
+
+function startCloudPolling(key) {
+  if (typeof CloudSync === "undefined" || !CloudSync.isEnabled()) return;
+  clearInterval(syncPollTimer);
+  syncPollTimer = setInterval(async () => {
+    try {
+      const payload = await SecureStorage.fetchRemoteVault(key);
+      if (!payload) return;
+      applyVaultPayload(payload);
+      migrateState();
+      renderAll();
+      showToast(t("toast.syncUpdated"));
+    } catch {
+      /* ignore transient sync errors */
+    }
+  }, 20000);
+}
+
 let persistTimer = null;
 
 function persistData() {
@@ -1640,6 +1659,7 @@ function startApp() {
   const launch = async () => {
     if (window.__secureStorageKey) {
       await bootstrapSecureData(window.__secureStorageKey);
+      startCloudPolling(window.__secureStorageKey);
     }
     migrateState();
     applyStaticI18n();
